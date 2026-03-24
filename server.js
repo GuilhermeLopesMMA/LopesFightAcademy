@@ -9,12 +9,14 @@ const Aula = require("./models/Aula");
 const Pagamento = require("./models/Pagamento");
 const multer = require("multer");
 const fs = require("fs");
+const { enviarEmail, emailTemplates } = require("./emailConfig");
 
 const app = express();
 
-// CORS Headers (permitir requisições do mesmo domínio)
+// CORS Headers
+const allowedOrigin = process.env.ALLOWED_ORIGIN || '*';
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Origin', allowedOrigin);
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
   if (req.method === 'OPTIONS') {
@@ -47,19 +49,19 @@ const storage = multer.diskStorage({
   },
   filename: async function (req, file, cb) {
     try {
-      console.log('🔧 Multer filename callback iniciado');
-      console.log('📋 User ID:', req.user?.id);
-      console.log('📁 Original filename:', file.originalname);
+      console.log(' Multer filename callback iniciado');
+      console.log(' User ID:', req.user?.id);
+      console.log(' Original filename:', file.originalname);
       
       // Buscar utilizador para obter o nome
       const utilizador = await User.findById(req.user.id);
       
       if (!utilizador) {
-        console.error('❌ Utilizador não encontrado no callback do multer!');
+        console.error(' Utilizador não encontrado no callback do multer!');
         return cb(new Error('Utilizador não encontrado'));
       }
       
-      console.log('👤 Utilizador encontrado:', utilizador.nome);
+      console.log(' Utilizador encontrado:', utilizador.nome);
       
       // Sanitizar nome (remover espaços, acentos, caracteres especiais, #, etc)
       const nomeSanitizado = utilizador.nome
@@ -92,21 +94,21 @@ const storage = multer.diskStorage({
         }
       }
       
-      console.log(`📸 Mimetype: ${file.mimetype}`);
-      console.log(`✅ Extensão definida: ${ext}`);
+      console.log(` Mimetype: ${file.mimetype}`);
+      console.log(` Extensão definida: ${ext}`);
       
       // Nome final: nome_utilizador.ext
       const nomeArquivo = nomeSanitizado + ext;
       
-      console.log(`📸 Nome sanitizado: ${nomeSanitizado}`);
-      console.log(`📸 Extensão: ${ext}`);
-      console.log(`✅ Nome final do ficheiro: ${nomeArquivo}`);
+      console.log(` Nome sanitizado: ${nomeSanitizado}`);
+      console.log(` Extensão: ${ext}`);
+      console.log(` Nome final do ficheiro: ${nomeArquivo}`);
       
       cb(null, nomeArquivo);
       
     } catch (error) {
-      console.error('❌ Erro no callback filename do multer:', error);
-      console.error('📋 Stack:', error.stack);
+      console.error(' Erro no callback filename do multer:', error);
+      console.error(' Stack:', error.stack);
       cb(error);
     }
   }
@@ -131,13 +133,13 @@ const upload = multer({
 // Middleware para capturar erros do multer
 app.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
-    console.error('❌ Erro do Multer:', error.message);
+    console.error(' Erro do Multer:', error.message);
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ erro: 'Ficheiro muito grande! Máximo: 5MB' });
     }
     return res.status(400).json({ erro: 'Erro no upload: ' + error.message });
   } else if (error) {
-    console.error('❌ Erro geral:', error.message);
+    console.error(' Erro geral:', error.message);
     return res.status(500).json({ erro: error.message });
   }
   next();
@@ -154,14 +156,13 @@ app.get("/", (req, res) => {
 // ========== ROTA DE REGISTO ==========
 app.post("/api/registo", async (req, res) => {
   try {
-    console.log('🔐 Recebendo registo:', req.body);
-    console.log('📋 Graduação recebida:', req.body.arte_marcial);
+    console.log(' Recebendo registo:', req.body);
 
-    const { nome, idade, arte_marcial, email, pass } = req.body;
+    const { nome, idade, email, pass } = req.body;
 
     // Validações básicas
-    if (!nome || !idade || !arte_marcial || !email || !pass) {
-      console.log('❌ Campos faltando:', { nome: !!nome, idade: !!idade, arte_marcial: !!arte_marcial, email: !!email, pass: !!pass });
+    if (!nome || !idade || !email || !pass) {
+      console.log(' Campos faltando:', { nome: !!nome, idade: !!idade, email: !!email, pass: !!pass });
       return res.status(400).json({ erro: "Todos os campos são obrigatórios" });
     }
 
@@ -179,21 +180,30 @@ app.post("/api/registo", async (req, res) => {
     const saltRounds = 10;
     const passHash = await bcrypt.hash(pass, saltRounds);
 
-    // Determinar se é admin automaticamente (Faixa Preta ou Marrom)
-    const isAdminAutomatico = (arte_marcial === 'Preta' || arte_marcial === 'Marrom');
+    //  Gerar código de verificação de 6 dígitos
+    const codigoVerificacao = Math.floor(100000 + Math.random() * 900000).toString();
     
-    console.log('📋 Criando utilizador com graduação:', arte_marcial);
+    // Código expira em 15 minutos
+    const codigoExpiraEm = new Date();
+    codigoExpiraEm.setMinutes(codigoExpiraEm.getMinutes() + 15);
+    
+    console.log(' Código gerado:', codigoVerificacao);
+    console.log(' Expira em:', codigoExpiraEm);
 
-    // Cria novo utilizador
+    // Cria novo utilizador (NÃO VERIFICADO!)
     const novoUtilizador = new User({
       nome,
       idade,
-      graduacao: arte_marcial,
+      graduacao: "Branca",
       email: email.toLowerCase(),
       pass: passHash,
-      isAdmin: isAdminAutomatico,  // ← Admin automático!
+      isAdmin: false,
       isSuperAdmin: false,
-      // Campos de atleta com valores padrão
+      // Verificação de email
+      emailVerificado: false,              // ← NÃO VERIFICADO!
+      codigoVerificacao: codigoVerificacao, // ← Código de 6 dígitos
+      codigoExpiraEm: codigoExpiraEm,      // ← Expira em 15 min
+      // Campos de atleta
       mma_vitorias: 0,
       mma_derrotas: 0,
       mma_empates: 0,
@@ -202,49 +212,39 @@ app.post("/api/registo", async (req, res) => {
     });
 
     await novoUtilizador.save();
-    console.log('✅ Utilizador registado:', novoUtilizador.email);
+    console.log(' Utilizador criado (não verificado):', novoUtilizador.email);
     
-    // Gera token JWT
-    const token = jwt.sign(
-      { id: novoUtilizador._id, email: novoUtilizador.email },
-      JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    //  Enviar email com código de verificação
+    console.log(' Enviando email com código de verificação...');
+    const emailTemplate = emailTemplates.codigoVerificacao(novoUtilizador.nome, codigoVerificacao);
+    const resultadoEmail = await enviarEmail(novoUtilizador.email, emailTemplate);
+    
+    if (resultadoEmail.sucesso) {
+      console.log(' Email com código enviado com sucesso!');
+    } else {
+      console.warn('  Email não enviado:', resultadoEmail.erro);
+      console.warn(' ATENÇÃO: Sem email configurado, o código é:', codigoVerificacao);
+    }
+    
+    //  NÃO FAZER LOGIN AUTOMATICAMENTE!
+    // Utilizador precisa verificar email primeiro
 
     res.status(201).json({ 
-      mensagem: "Registo realizado com sucesso!",
-      token,
-      utilizador: {
-        id: novoUtilizador._id,
-        nome: novoUtilizador.nome,
-        email: novoUtilizador.email,
-        idade: novoUtilizador.idade,
-        arte_marcial: novoUtilizador.graduacao,
-        isAdmin: novoUtilizador.isAdmin,
-        isSuperAdmin: novoUtilizador.isSuperAdmin,
-        mma_vitorias: novoUtilizador.mma_vitorias,
-        mma_derrotas: novoUtilizador.mma_derrotas,
-        mma_empates: novoUtilizador.mma_empates,
-        mma_especialidade: novoUtilizador.mma_especialidade,
-        bjj_vitorias: novoUtilizador.bjj_vitorias,
-        bjj_derrotas: novoUtilizador.bjj_derrotas,
-        bjj_especialidade: novoUtilizador.bjj_especialidade,
-        altura: novoUtilizador.altura,
-        peso: novoUtilizador.peso,
-        alcance: novoUtilizador.alcance,
-        sobre: novoUtilizador.sobre,
-        criado_em: novoUtilizador.dataRegisto
-      }
+      mensagem: "Conta criada! Verifica o teu email para ativar a conta.",
+      emailEnviado: resultadoEmail.sucesso,
+      email: novoUtilizador.email,
+      // Apenas expor codigo em desenvolvimento quando email falha
+      ...((process.env.NODE_ENV !== 'production' && !resultadoEmail.sucesso) && { codigoDebug: codigoVerificacao })
     });
 
   } catch (error) {
-    console.error("❌ Erro ao registar:", error);
-    console.error("📋 Nome do erro:", error.name);
-    console.error("📋 Mensagem:", error.message);
-    console.error("📋 Stack:", error.stack);
+    console.error(" Erro ao registar:", error);
+    console.error(" Nome do erro:", error.name);
+    console.error(" Mensagem:", error.message);
+    console.error(" Stack:", error.stack);
     
     if (error.name === 'ValidationError') {
-      console.error("📋 Erros de validação:", error.errors);
+      console.error(" Erros de validação:", error.errors);
       const camposErro = Object.keys(error.errors).map(campo => ({
         campo,
         mensagem: error.errors[campo].message
@@ -259,10 +259,137 @@ app.post("/api/registo", async (req, res) => {
   }
 });
 
+// ========== ROTA DE VERIFICAÇÃO DE EMAIL ==========
+app.post("/api/verificar-email", async (req, res) => {
+  try {
+    const { email, codigo } = req.body;
+
+    if (!email || !codigo) {
+      return res.status(400).json({ erro: "Email e código são obrigatórios" });
+    }
+
+    // Buscar utilizador
+    const utilizador = await User.findOne({ email: email.toLowerCase() });
+    
+    if (!utilizador) {
+      return res.status(404).json({ erro: "Utilizador não encontrado" });
+    }
+
+    // Verificar se já está verificado
+    if (utilizador.emailVerificado) {
+      return res.status(400).json({ erro: "Email já foi verificado! Podes fazer login." });
+    }
+
+    // Verificar se código expirou
+    if (new Date() > utilizador.codigoExpiraEm) {
+      return res.status(400).json({ 
+        erro: "Código expirado! Solicita um novo código.",
+        codigoExpirado: true
+      });
+    }
+
+    // Verificar código
+    if (utilizador.codigoVerificacao !== codigo) {
+      return res.status(400).json({ erro: "Código incorreto! Verifica e tenta novamente." });
+    }
+
+    //  Código correto! Verificar email
+    utilizador.emailVerificado = true;
+    utilizador.codigoVerificacao = null;  // Limpar código
+    utilizador.codigoExpiraEm = null;     // Limpar expiração
+    await utilizador.save();
+
+    console.log(' Email verificado:', utilizador.email);
+
+    // Gerar token JWT para login automático
+    const token = jwt.sign(
+      { id: utilizador._id, email: utilizador.email },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    res.json({
+      mensagem: "Email verificado com sucesso! Bem-vindo à LFA!",
+      token,
+      utilizador: {
+        id: utilizador._id,
+        nome: utilizador.nome,
+        email: utilizador.email,
+        idade: utilizador.idade,
+        arte_marcial: utilizador.graduacao,
+        isAdmin: utilizador.isAdmin,
+        isSuperAdmin: utilizador.isSuperAdmin
+      }
+    });
+
+  } catch (error) {
+    console.error(" Erro ao verificar email:", error);
+    res.status(500).json({ erro: "Erro ao verificar email" });
+  }
+});
+
+// ========== ROTA DE REENVIAR CÓDIGO ==========
+app.post("/api/reenviar-codigo", async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ erro: "Email é obrigatório" });
+    }
+
+    // Buscar utilizador
+    const utilizador = await User.findOne({ email: email.toLowerCase() });
+    
+    if (!utilizador) {
+      return res.status(404).json({ erro: "Utilizador não encontrado" });
+    }
+
+    // Verificar se já está verificado
+    if (utilizador.emailVerificado) {
+      return res.status(400).json({ erro: "Email já está verificado! Podes fazer login." });
+    }
+
+    // Gerar novo código
+    const novoCodigoVerificacao = Math.floor(100000 + Math.random() * 900000).toString();
+    const novoCodigoExpiraEm = new Date();
+    novoCodigoExpiraEm.setMinutes(novoCodigoExpiraEm.getMinutes() + 15);
+
+    utilizador.codigoVerificacao = novoCodigoVerificacao;
+    utilizador.codigoExpiraEm = novoCodigoExpiraEm;
+    await utilizador.save();
+
+    console.log(' Novo código gerado para', utilizador.email, ':', novoCodigoVerificacao);
+
+    // Enviar email
+    const emailTemplate = emailTemplates.codigoVerificacao(utilizador.nome, novoCodigoVerificacao);
+    const resultadoEmail = await enviarEmail(utilizador.email, emailTemplate);
+
+    if (resultadoEmail.sucesso) {
+      console.log(' Novo código enviado!');
+      res.json({ 
+        mensagem: "Novo código enviado! Verifica o teu email.",
+        emailEnviado: true
+      });
+    } else {
+      console.warn('  Email não enviado:', resultadoEmail.erro);
+      res.json({ 
+        mensagem: "Novo código gerado. Email não configurado.",
+        emailEnviado: false,
+        // Apenas expor codigo em desenvolvimento
+        ...(process.env.NODE_ENV !== 'production' && { codigoDebug: novoCodigoVerificacao })
+      });
+    }
+
+  } catch (error) {
+    console.error(" Erro ao reenviar código:", error);
+    res.status(500).json({ erro: "Erro ao reenviar código" });
+  }
+});
+
 // ========== ROTA DE LOGIN ==========
 app.post("/api/login", async (req, res) => {
   try {
-    console.log('🔐 Tentativa de login:', req.body.email);
+    console.log(' Tentativa de login:', req.body.email);
 
     const { email, pass } = req.body;
 
@@ -283,7 +410,16 @@ app.post("/api/login", async (req, res) => {
       return res.status(401).json({ erro: "Email ou palavra-passe incorretos" });
     }
 
-    console.log('✅ Login bem-sucedido:', utilizador.email);
+    //  VERIFICAR SE EMAIL FOI VERIFICADO
+    if (!utilizador.emailVerificado) {
+      return res.status(403).json({ 
+        erro: "Email não verificado! Verifica o teu email e insere o código de verificação.",
+        emailNaoVerificado: true,
+        email: utilizador.email
+      });
+    }
+
+    console.log(' Login bem-sucedido:', utilizador.email);
 
     // Gera token JWT
     const token = jwt.sign(
@@ -319,7 +455,7 @@ app.post("/api/login", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("❌ Erro ao fazer login:", error);
+    console.error(" Erro ao fazer login:", error);
     res.status(500).json({ erro: "Erro ao processar login" });
   }
 });
@@ -351,7 +487,8 @@ const verificarAdmin = async (req, res, next) => {
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
     
-    if (!utilizador.isAdmin) {
+    // SuperAdmin sempre tem acesso a rotas de admin
+    if (!utilizador.isAdmin && !utilizador.isSuperAdmin) {
       return res.status(403).json({ erro: 'Acesso negado - Apenas administradores' });
     }
     
@@ -437,36 +574,42 @@ app.put("/api/perfil", autenticarToken, async (req, res) => {
     } = req.body;
 
     // Validações básicas
-    if (!nome || !idade || !arte_marcial) {
+    if (!nome || !idade) {
       return res.status(400).json({ 
-        erro: 'Nome, idade e graduação são obrigatórios' 
+        erro: 'Nome e idade são obrigatórios' 
       });
     }
 
-    // Preparar dados para atualização
+    // Buscar utilizador atual para verificar permissões
+    const utilizadorAtual = await User.findById(userId);
+
+    if (!utilizadorAtual) {
+      return res.status(404).json({ erro: 'Utilizador não encontrado' });
+    }
+
+    const isAdmin = utilizadorAtual.isAdmin || utilizadorAtual.isSuperAdmin;
+
+    // Preparar dados para atualização (campos básicos — disponíveis para todos)
     const dadosAtualizacao = {
       nome,
       idade,
-      graduacao: arte_marcial,
-      mma_vitorias: mma_vitorias || 0,
-      mma_derrotas: mma_derrotas || 0,
-      mma_empates: mma_empates || 0,
-      mma_especialidade: mma_especialidade || null,
-      bjj_vitorias: bjj_vitorias || 0,
-      bjj_derrotas: bjj_derrotas || 0,
-      bjj_especialidade: bjj_especialidade || null,
-      altura: altura || null,
-      peso: peso || null,
-      alcance: alcance || null,
+      altura: (altura !== undefined && altura !== '' && altura !== null) ? altura : null,
+      peso: (peso !== undefined && peso !== '' && peso !== null) ? peso : null,
+      alcance: (alcance !== undefined && alcance !== '' && alcance !== null) ? alcance : null,
       sobre: sobre || null
     };
-    
-    // Buscar utilizador atual para verificar se é Super Admin
-    const utilizadorAtual = await User.findById(userId);
-    
-    // Atualizar isAdmin automaticamente (exceto se for Super Admin)
-    if (!utilizadorAtual.isSuperAdmin) {
-      dadosAtualizacao.isAdmin = (arte_marcial === 'Preta' || arte_marcial === 'Marrom');
+
+    // Campos restritos a admin: faixa e recordes MMA/BJJ
+    if (isAdmin) {
+      dadosAtualizacao.graduacao = arte_marcial;
+      dadosAtualizacao.mma_vitorias = mma_vitorias || 0;
+      dadosAtualizacao.mma_derrotas = mma_derrotas || 0;
+      dadosAtualizacao.mma_empates = mma_empates || 0;
+      dadosAtualizacao.mma_especialidade = mma_especialidade || null;
+      dadosAtualizacao.bjj_vitorias = bjj_vitorias || 0;
+      dadosAtualizacao.bjj_derrotas = bjj_derrotas || 0;
+      dadosAtualizacao.bjj_especialidade = bjj_especialidade || null;
+      // Nunca alterar isAdmin/isSuperAdmin do proprio utilizador nesta rota
     }
 
     // Atualizar no MongoDB
@@ -483,7 +626,7 @@ app.put("/api/perfil", autenticarToken, async (req, res) => {
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
 
-    console.log('✅ Perfil atualizado:', utilizadorAtualizado.email);
+    console.log(' Perfil atualizado:', utilizadorAtualizado.email);
 
     // Formatar resposta
     const perfil = {
@@ -512,7 +655,7 @@ app.put("/api/perfil", autenticarToken, async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Erro ao atualizar perfil:', error);
+    console.error(' Erro ao atualizar perfil:', error);
     
     if (error.name === 'ValidationError') {
       return res.status(400).json({ 
@@ -528,16 +671,16 @@ app.put("/api/perfil", autenticarToken, async (req, res) => {
 // ========== ROTA PROTEGIDA - UPLOAD DE FOTO (POST) ==========
 app.post("/api/perfil/foto", autenticarToken, upload.single('foto'), async (req, res) => {
   try {
-    console.log('📸 Requisição de upload recebida');
-    console.log('📋 User ID:', req.user?.id);
-    console.log('📁 File:', req.file ? 'Recebido' : 'NÃO recebido');
+    console.log(' Requisição de upload recebida');
+    console.log(' User ID:', req.user?.id);
+    console.log(' File:', req.file ? 'Recebido' : 'NÃO recebido');
     
     if (!req.file) {
-      console.log('❌ Nenhum ficheiro foi enviado!');
+      console.log(' Nenhum ficheiro foi enviado!');
       return res.status(400).json({ erro: 'Nenhuma foto foi enviada' });
     }
     
-    console.log('📸 Ficheiro recebido:', {
+    console.log(' Ficheiro recebido:', {
       filename: req.file.filename,
       size: req.file.size,
       mimetype: req.file.mimetype
@@ -549,11 +692,11 @@ app.post("/api/perfil/foto", autenticarToken, upload.single('foto'), async (req,
     const utilizador = await User.findById(userId);
     
     if (!utilizador) {
-      console.log('❌ Utilizador não encontrado:', userId);
+      console.log(' Utilizador não encontrado:', userId);
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
     
-    console.log('👤 Utilizador encontrado:', utilizador.nome);
+    console.log(' Utilizador encontrado:', utilizador.nome);
     
     // Apagar foto antiga se existir (ignora se estiver em uso - será sobrescrita)
     if (utilizador.foto_url) {
@@ -561,12 +704,12 @@ app.post("/api/perfil/foto", autenticarToken, upload.single('foto'), async (req,
       if (fs.existsSync(oldPhotoPath)) {
         try {
           fs.unlinkSync(oldPhotoPath);
-          console.log('🗑️ Foto antiga apagada:', oldPhotoPath);
+          console.log(' Foto antiga apagada:', oldPhotoPath);
         } catch (unlinkError) {
           if (unlinkError.code === 'EBUSY') {
-            console.log('⚠️ Foto antiga em uso, será sobrescrita:', oldPhotoPath);
+            console.log(' Foto antiga em uso, será sobrescrita:', oldPhotoPath);
           } else {
-            console.warn('⚠️ Erro ao apagar foto antiga (continua):', unlinkError.message);
+            console.warn(' Erro ao apagar foto antiga (continua):', unlinkError.message);
           }
           // Continua de qualquer forma - multer sobrescreve ou cria ficheiro novo
         }
@@ -575,31 +718,31 @@ app.post("/api/perfil/foto", autenticarToken, upload.single('foto'), async (req,
     
     // URL da nova foto
     const fotoUrl = '/media/atletas/' + req.file.filename;
-    console.log('📋 URL da foto:', fotoUrl);
+    console.log(' URL da foto:', fotoUrl);
     
     // Verificar se o ficheiro foi realmente criado
     const filePath = './media/atletas/' + req.file.filename;
     if (fs.existsSync(filePath)) {
-      console.log('✅ Ficheiro criado no disco:', filePath);
+      console.log(' Ficheiro criado no disco:', filePath);
       const stats = fs.statSync(filePath);
-      console.log('📊 Tamanho no disco:', stats.size, 'bytes');
+      console.log(' Tamanho no disco:', stats.size, 'bytes');
     } else {
-      console.error('❌ ERRO: Ficheiro NÃO foi criado no disco!');
+      console.error(' ERRO: Ficheiro NÃO foi criado no disco!');
     }
     
     // Atualizar utilizador
-    console.log('💾 Guardando foto_url no utilizador...');
+    console.log(' Guardando foto_url no utilizador...');
     utilizador.foto_url = fotoUrl;
     
     try {
       await utilizador.save();
-      console.log('✅ Utilizador atualizado na BD com sucesso!');
+      console.log(' Utilizador atualizado na BD com sucesso!');
     } catch (saveError) {
-      console.error('❌ Erro ao salvar utilizador na BD:', saveError);
+      console.error(' Erro ao salvar utilizador na BD:', saveError);
       throw saveError;
     }
     
-    console.log('✅ Foto atualizada com sucesso:', fotoUrl);
+    console.log(' Foto atualizada com sucesso:', fotoUrl);
     
     res.json({
       mensagem: 'Foto atualizada com sucesso',
@@ -607,10 +750,10 @@ app.post("/api/perfil/foto", autenticarToken, upload.single('foto'), async (req,
     });
     
   } catch (error) {
-    console.error('❌ Erro ao fazer upload de foto:', error);
-    console.error('📋 Nome do erro:', error.name);
-    console.error('📋 Mensagem:', error.message);
-    console.error('📋 Stack:', error.stack);
+    console.error(' Erro ao fazer upload de foto:', error);
+    console.error(' Nome do erro:', error.name);
+    console.error(' Mensagem:', error.message);
+    console.error(' Stack:', error.stack);
     
     // Se o ficheiro foi criado mas houve erro depois, tentar apagar (ignora se em uso)
     if (req.file) {
@@ -618,12 +761,12 @@ app.post("/api/perfil/foto", autenticarToken, upload.single('foto'), async (req,
       if (fs.existsSync(filePath)) {
         try {
           fs.unlinkSync(filePath);
-          console.log('🗑️ Ficheiro apagado devido a erro:', filePath);
+          console.log(' Ficheiro apagado devido a erro:', filePath);
         } catch (cleanupError) {
           if (cleanupError.code === 'EBUSY') {
-            console.log('⚠️ Não foi possível apagar ficheiro (em uso):', filePath);
+            console.log(' Não foi possível apagar ficheiro (em uso):', filePath);
           } else {
-            console.warn('⚠️ Erro ao apagar ficheiro de cleanup:', cleanupError.message);
+            console.warn(' Erro ao apagar ficheiro de cleanup:', cleanupError.message);
           }
         }
       }
@@ -653,12 +796,12 @@ app.delete("/api/perfil/foto", autenticarToken, async (req, res) => {
       if (fs.existsSync(photoPath)) {
         try {
           fs.unlinkSync(photoPath);
-          console.log('🗑️ Foto apagada:', photoPath);
+          console.log(' Foto apagada:', photoPath);
         } catch (unlinkError) {
           if (unlinkError.code === 'EBUSY') {
-            console.log('⚠️ Foto em uso, não foi possível apagar:', photoPath);
+            console.log(' Foto em uso, não foi possível apagar:', photoPath);
           } else {
-            console.warn('⚠️ Erro ao apagar foto:', unlinkError.message);
+            console.warn(' Erro ao apagar foto:', unlinkError.message);
           }
           // Continua de qualquer forma - remove da BD
         }
@@ -669,12 +812,12 @@ app.delete("/api/perfil/foto", autenticarToken, async (req, res) => {
     utilizador.foto_url = null;
     await utilizador.save();
     
-    console.log('📸 Foto removida para:', utilizador.nome);
+    console.log(' Foto removida para:', utilizador.nome);
     
     res.json({ mensagem: 'Foto removida com sucesso' });
     
   } catch (error) {
-    console.error('❌ Erro ao remover foto:', error);
+    console.error(' Erro ao remover foto:', error);
     res.status(500).json({ erro: 'Erro ao remover foto' });
   }
 });
@@ -716,20 +859,20 @@ app.put("/api/alterar-pass", autenticarToken, async (req, res) => {
     utilizador.pass = novaPassHash;
     await utilizador.save();
 
-    console.log('✅ Palavra-passe alterada:', utilizador.email);
+    console.log(' Palavra-passe alterada:', utilizador.email);
 
     res.json({ mensagem: 'Palavra-passe alterada com sucesso!' });
 
   } catch (error) {
-    console.error('❌ Erro ao alterar palavra-passe:', error);
+    console.error(' Erro ao alterar palavra-passe:', error);
     res.status(500).json({ erro: 'Erro ao alterar palavra-passe' });
   }
 });
 
 // ========== ROTA PARA LISTAR UTILIZADORES (PARA TESTES) ==========
-app.get("/api/utilizadores", async (req, res) => {
+app.get("/api/utilizadores", autenticarToken, verificarAdmin, async (req, res) => {
   try {
-    const utilizadores = await User.find().select("-pass");
+    const utilizadores = await User.find().select("-pass -codigoVerificacao -codigoExpiraEm");
     res.json(utilizadores);
   } catch (error) {
     res.status(500).json({ erro: "Erro ao buscar utilizadores" });
@@ -739,7 +882,7 @@ app.get("/api/utilizadores", async (req, res) => {
 // ========== ROTA PÚBLICA - LISTAR ATLETAS ==========
 app.get("/api/atletas", async (req, res) => {
   try {
-    console.log('🥋 Buscando todos os atletas...');
+    console.log(' Buscando todos os atletas...');
     
     // Buscar todos os utilizadores, excluindo a pass
     const atletas = await User.find()
@@ -768,11 +911,11 @@ app.get("/api/atletas", async (req, res) => {
       foto_url: atleta.foto_url  // ← FOTO DE PERFIL
     }));
     
-    console.log(`✅ ${atletasFormatados.length} atletas encontrados`);
+    console.log(` ${atletasFormatados.length} atletas encontrados`);
     res.json(atletasFormatados);
     
   } catch (error) {
-    console.error("❌ Erro ao buscar atletas:", error);
+    console.error(" Erro ao buscar atletas:", error);
     res.status(500).json({ erro: "Erro ao buscar atletas" });
   }
 });
@@ -780,7 +923,7 @@ app.get("/api/atletas", async (req, res) => {
 // ========== ROTA PÚBLICA - VER ATLETA ESPECÍFICO (GET) ==========
 app.get("/api/atletas/:id", async (req, res) => {
   try {
-    console.log('🥋 Buscando atleta:', req.params.id);
+    console.log(' Buscando atleta:', req.params.id);
     
     const atleta = await User.findById(req.params.id).select('-pass -__v');
     
@@ -810,11 +953,11 @@ app.get("/api/atletas/:id", async (req, res) => {
       foto_url: atleta.foto_url  // ← FOTO DE PERFIL
     };
     
-    console.log('✅ Atleta encontrado:', atleta.nome);
+    console.log(' Atleta encontrado:', atleta.nome);
     res.json(atletaFormatado);
     
   } catch (error) {
-    console.error("❌ Erro ao buscar atleta:", error);
+    console.error(" Erro ao buscar atleta:", error);
     res.status(500).json({ erro: "Erro ao buscar atleta" });
   }
 });
@@ -831,12 +974,12 @@ app.delete("/api/perfil", autenticarToken, async (req, res) => {
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
 
-    console.log('✅ Conta eliminada:', resultado.email);
+    console.log(' Conta eliminada:', resultado.email);
 
     res.json({ mensagem: 'Conta eliminada com sucesso' });
 
   } catch (error) {
-    console.error('❌ Erro ao eliminar conta:', error);
+    console.error(' Erro ao eliminar conta:', error);
     res.status(500).json({ erro: 'Erro ao eliminar conta' });
   }
 });
@@ -894,7 +1037,7 @@ app.get("/api/admin/stats", autenticarToken, verificarAdmin, async (req, res) =>
       porGraduacao
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar estatísticas:', error);
+    console.error(' Erro ao buscar estatísticas:', error);
     res.status(500).json({ erro: 'Erro ao buscar estatísticas' });
   }
 });
@@ -907,10 +1050,12 @@ app.get("/api/admin/utilizadores", autenticarToken, verificarAdmin, async (req, 
     let filtro = {};
     
     if (pesquisa) {
+      // Escapar caracteres especiais de regex para evitar ReDoS
+      const pesquisaSegura = pesquisa.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       filtro = {
         $or: [
-          { nome: { $regex: pesquisa, $options: 'i' } },
-          { email: { $regex: pesquisa, $options: 'i' } }
+          { nome: { $regex: pesquisaSegura, $options: 'i' } },
+          { email: { $regex: pesquisaSegura, $options: 'i' } }
         ]
       };
     }
@@ -930,7 +1075,7 @@ app.get("/api/admin/utilizadores", autenticarToken, verificarAdmin, async (req, 
       total
     });
   } catch (error) {
-    console.error('❌ Erro ao listar utilizadores:', error);
+    console.error(' Erro ao listar utilizadores:', error);
     res.status(500).json({ erro: 'Erro ao listar utilizadores' });
   }
 });
@@ -946,7 +1091,7 @@ app.get("/api/admin/utilizador/:id", autenticarToken, verificarAdmin, async (req
     
     res.json(utilizador);
   } catch (error) {
-    console.error('❌ Erro ao buscar utilizador:', error);
+    console.error(' Erro ao buscar utilizador:', error);
     res.status(500).json({ erro: 'Erro ao buscar utilizador' });
   }
 });
@@ -982,9 +1127,9 @@ app.put("/api/admin/utilizador/:id", autenticarToken, verificarAdmin, async (req
       bjj_vitorias: bjj_vitorias || 0,
       bjj_derrotas: bjj_derrotas || 0,
       bjj_especialidade: bjj_especialidade || null,
-      altura: altura || null,
-      peso: peso || null,
-      alcance: alcance || null,
+      altura: (altura !== undefined && altura !== '' && altura !== null) ? altura : null,
+      peso: (peso !== undefined && peso !== '' && peso !== null) ? peso : null,
+      alcance: (alcance !== undefined && alcance !== '' && alcance !== null) ? alcance : null,
       sobre: sobre || null
     };
     
@@ -995,8 +1140,9 @@ app.put("/api/admin/utilizador/:id", autenticarToken, verificarAdmin, async (req
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
     
-    // Atualizar isAdmin automaticamente (exceto se for Super Admin)
-    if (!utilizadorAtual.isSuperAdmin) {
+    // Atualizar isAdmin automaticamente pela faixa (exceto Super Admin e o proprio admin que edita)
+    const eProprioUtilizador = req.params.id === req.user.id;
+    if (!utilizadorAtual.isSuperAdmin && !eProprioUtilizador) {
       dadosAtualizacao.isAdmin = (graduacao === 'Preta' || graduacao === 'Marrom');
     }
     
@@ -1006,10 +1152,14 @@ app.put("/api/admin/utilizador/:id", autenticarToken, verificarAdmin, async (req
       { new: true, runValidators: true }
     ).select('-pass');
     
-    console.log('✅ Admin editou utilizador:', utilizador.email);
+    if (!utilizador) {
+      return res.status(404).json({ erro: 'Utilizador não encontrado' });
+    }
+
+    console.log(' Admin editou utilizador:', utilizador.email);
     res.json({ mensagem: 'Utilizador atualizado com sucesso', utilizador });
   } catch (error) {
-    console.error('❌ Erro ao editar utilizador:', error);
+    console.error(' Erro ao editar utilizador:', error);
     res.status(500).json({ erro: 'Erro ao editar utilizador' });
   }
 });
@@ -1028,10 +1178,10 @@ app.delete("/api/admin/utilizador/:id", autenticarToken, verificarAdmin, async (
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
     
-    console.log('✅ Admin eliminou utilizador:', utilizador.email);
+    console.log(' Admin eliminou utilizador:', utilizador.email);
     res.json({ mensagem: 'Utilizador eliminado com sucesso' });
   } catch (error) {
-    console.error('❌ Erro ao eliminar utilizador:', error);
+    console.error(' Erro ao eliminar utilizador:', error);
     res.status(500).json({ erro: 'Erro ao eliminar utilizador' });
   }
 });
@@ -1056,13 +1206,13 @@ app.put("/api/admin/tornar-admin/:id", autenticarToken, verificarAdmin, async (r
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
     
-    console.log(`✅ Admin ${isAdmin ? 'promoveu' : 'removeu'} admin:`, utilizador.email);
+    console.log(` Admin ${isAdmin ? 'promoveu' : 'removeu'} admin:`, utilizador.email);
     res.json({ 
       mensagem: isAdmin ? 'Utilizador promovido a administrador' : 'Status de administrador removido',
       utilizador 
     });
   } catch (error) {
-    console.error('❌ Erro ao alterar status admin:', error);
+    console.error(' Erro ao alterar status admin:', error);
     res.status(500).json({ erro: 'Erro ao alterar status' });
   }
 });
@@ -1087,7 +1237,7 @@ app.get("/api/superadmin/admins", autenticarToken, verificarSuperAdmin, async (r
     
     res.json(adminsFormatados);
   } catch (error) {
-    console.error('❌ Erro ao listar admins:', error);
+    console.error(' Erro ao listar admins:', error);
     res.status(500).json({ erro: "Erro ao listar administradores" });
   }
 });
@@ -1119,13 +1269,13 @@ app.put("/api/superadmin/tornar-superadmin/:id", autenticarToken, verificarSuper
       return res.status(404).json({ erro: 'Utilizador não encontrado' });
     }
     
-    console.log(`✅ Super Admin ${isSuperAdmin ? 'promoveu' : 'removeu'} super admin:`, utilizador.email);
+    console.log(` Super Admin ${isSuperAdmin ? 'promoveu' : 'removeu'} super admin:`, utilizador.email);
     res.json({ 
       mensagem: isSuperAdmin ? 'Utilizador promovido a Super Administrador' : 'Privilégios de Super Admin removidos',
       utilizador 
     });
   } catch (error) {
-    console.error('❌ Erro ao alterar Super Admin:', error);
+    console.error(' Erro ao alterar Super Admin:', error);
     res.status(500).json({ erro: 'Erro ao alterar permissões' });
   }
 });
@@ -1173,7 +1323,7 @@ app.get("/api/superadmin/stats-avancadas", autenticarToken, verificarSuperAdmin,
       porGraduacao
     });
   } catch (error) {
-    console.error('❌ Erro ao buscar estatísticas avançadas:', error);
+    console.error(' Erro ao buscar estatísticas avançadas:', error);
     res.status(500).json({ erro: "Erro ao buscar estatísticas" });
   }
 });
@@ -1198,7 +1348,7 @@ app.get("/api/superadmin/logs", autenticarToken, verificarSuperAdmin, async (req
     
     res.json({ logs });
   } catch (error) {
-    console.error('❌ Erro ao buscar logs:', error);
+    console.error(' Erro ao buscar logs:', error);
     res.status(500).json({ erro: "Erro ao buscar logs" });
   }
 });
@@ -1616,7 +1766,7 @@ app.post("/api/admin/pagamentos/criar-mensalidades", autenticarToken, verificarA
   try {
     const { mes, ano } = req.body;
     
-    console.log('📅 Criar mensalidades:', { mes, ano });
+    console.log(' Criar mensalidades:', { mes, ano });
     
     if (!mes || !ano) {
       return res.status(400).json({ erro: 'Mês e ano são obrigatórios' });
@@ -1625,7 +1775,7 @@ app.post("/api/admin/pagamentos/criar-mensalidades", autenticarToken, verificarA
     // Buscar todos os utilizadores
     const alunos = await User.find({});
     
-    console.log(`👥 Total de utilizadores encontrados: ${alunos.length}`);
+    console.log(` Total de utilizadores encontrados: ${alunos.length}`);
     
     if (alunos.length === 0) {
       return res.status(404).json({ 
@@ -1639,7 +1789,7 @@ app.post("/api/admin/pagamentos/criar-mensalidades", autenticarToken, verificarA
     // Data de vencimento: dia 10 do mês
     const dataVencimento = new Date(ano, mes - 1, 10);
     
-    console.log('📆 Data de vencimento:', dataVencimento);
+    console.log(' Data de vencimento:', dataVencimento);
     
     const mensalidadesCriadas = [];
     const erros = [];
@@ -1654,7 +1804,7 @@ app.post("/api/admin/pagamentos/criar-mensalidades", autenticarToken, verificarA
         });
         
         if (existente) {
-          console.log(`⚠️ ${aluno.nome}: Já existe mensalidade`);
+          console.log(` ${aluno.nome}: Já existe mensalidade`);
           erros.push(`${aluno.nome}: Já existe mensalidade para ${mes}/${ano}`);
           continue;
         }
@@ -1671,15 +1821,15 @@ app.post("/api/admin/pagamentos/criar-mensalidades", autenticarToken, verificarA
         
         await novaMensalidade.save();
         mensalidadesCriadas.push(aluno.nome);
-        console.log(`✅ ${aluno.nome}: Mensalidade criada`);
+        console.log(` ${aluno.nome}: Mensalidade criada`);
         
       } catch (err) {
-        console.error(`❌ Erro para ${aluno.nome}:`, err.message);
+        console.error(` Erro para ${aluno.nome}:`, err.message);
         erros.push(`${aluno.nome}: ${err.message}`);
       }
     }
     
-    console.log(`📊 Resumo: ${mensalidadesCriadas.length} criadas, ${erros.length} erros`);
+    console.log(` Resumo: ${mensalidadesCriadas.length} criadas, ${erros.length} erros`);
     
     res.json({
       mensagem: mensalidadesCriadas.length > 0 
@@ -1692,7 +1842,7 @@ app.post("/api/admin/pagamentos/criar-mensalidades", autenticarToken, verificarA
     });
     
   } catch (error) {
-    console.error('❌ Erro ao criar mensalidades:', error);
+    console.error(' Erro ao criar mensalidades:', error);
     res.status(500).json({ 
       erro: 'Erro ao criar mensalidades',
       detalhes: error.message
@@ -1812,18 +1962,18 @@ const PORT = process.env.PORT || 3000;
 // Verificar se a pasta de fotos existe
 const fotosPath = path.join(__dirname, 'media/atletas');
 if (fs.existsSync(fotosPath)) {
-  console.log('✅ Pasta de fotos encontrada:', fotosPath);
+  console.log(' Pasta de fotos encontrada:', fotosPath);
 } else {
-  console.log('⚠️ Pasta de fotos NÃO existe! Criando...');
+  console.log(' Pasta de fotos NÃO existe! Criando...');
   fs.mkdirSync(fotosPath, { recursive: true });
-  console.log('✅ Pasta criada:', fotosPath);
+  console.log(' Pasta criada:', fotosPath);
 }
 
 app.listen(PORT, () => {
-  console.log('\n🚀 ================================');
-  console.log(`✅ Servidor a correr na porta ${PORT}`);
-  console.log(`🌐 Aceder: http://localhost:${PORT}`);
-  console.log('🔐 API Endpoints disponíveis:');
+  console.log('\n ================================');
+  console.log(` Servidor a correr na porta ${PORT}`);
+  console.log(` Aceder: http://localhost:${PORT}`);
+  console.log(' API Endpoints disponíveis:');
   console.log('   POST   /api/registo');
   console.log('   POST   /api/login');
   console.log('   GET    /api/perfil (protegido)');
@@ -1833,7 +1983,7 @@ app.listen(PORT, () => {
   console.log('   GET    /api/utilizadores');
   console.log('   GET    /api/atletas');
   console.log('');
-  console.log('👨‍💼 ROTAS ADMIN (Faixa Preta + Castanha):');
+  console.log('‍ ROTAS ADMIN (Faixa Preta + Castanha):');
   console.log('   GET    /api/admin/stats');
   console.log('   GET    /api/admin/utilizadores');
   console.log('   GET    /api/admin/utilizador/:id');
@@ -1841,37 +1991,37 @@ app.listen(PORT, () => {
   console.log('   DELETE /api/admin/utilizador/:id');
   console.log('   PUT    /api/admin/tornar-admin/:id');
   console.log('');
-  console.log('👑 ROTAS SUPER ADMIN:');
+  console.log(' ROTAS SUPER ADMIN:');
   console.log('   GET    /api/superadmin/admins');
   console.log('   PUT    /api/superadmin/tornar-superadmin/:id');
   console.log('   GET    /api/superadmin/stats-avancadas');
   console.log('   GET    /api/superadmin/logs');
   console.log('');
-  console.log('📅 ROTAS DE AULAS:');
+  console.log(' ROTAS DE AULAS:');
   console.log('   GET    /api/aulas - Listar aulas');
   console.log('   GET    /api/minhas-inscricoes (protegido)');
   console.log('   POST   /api/aulas/:id/inscrever (protegido)');
   console.log('   DELETE /api/aulas/:id/desinscrever (protegido)');
   console.log('');
-  console.log('⚙️  ROTAS ADMIN AULAS:');
+  console.log('  ROTAS ADMIN AULAS:');
   console.log('   GET    /api/admin/aulas');
   console.log('   POST   /api/admin/aulas');
   console.log('   PUT    /api/admin/aulas/:id');
   console.log('   DELETE /api/admin/aulas/:id');
   console.log('   GET    /api/admin/aulas/:id/alunos');
   console.log('');
-  console.log('💰 ROTAS DE PAGAMENTOS:');
+  console.log(' ROTAS DE PAGAMENTOS:');
   console.log('   GET    /api/meus-pagamentos (protegido)');
   console.log('   GET    /api/meus-pagamentos/pendentes (protegido)');
   console.log('');
-  console.log('⚙️  ROTAS ADMIN PAGAMENTOS:');
+  console.log('  ROTAS ADMIN PAGAMENTOS:');
   console.log('   GET    /api/admin/pagamentos');
   console.log('   POST   /api/admin/pagamentos/criar-mensalidades');
   console.log('   POST   /api/admin/pagamentos/:id/registar');
   console.log('   DELETE /api/admin/pagamentos/:id');
   console.log('   GET    /api/admin/stats-pagamentos');
   console.log('');
-  console.log('📸 FICHEIROS ESTÁTICOS:');
+  console.log(' FICHEIROS ESTÁTICOS:');
   console.log('   GET    /media/atletas/* - Fotos dos atletas');
   console.log('   Pasta: ' + path.join(__dirname, 'media/atletas'));
   console.log('================================\n');
